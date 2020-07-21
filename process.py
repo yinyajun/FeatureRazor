@@ -35,6 +35,10 @@ class ConfigBackend(object, six.with_metaclass(abc.ABCMeta)):
     def has(self, obj, item):
         pass
 
+    @abc.abstractmethod
+    def keys(self, obj):
+        pass
+
 
 class JsonConfig(ConfigBackend):
     def read_config(self, file):
@@ -54,6 +58,9 @@ class JsonConfig(ConfigBackend):
     def has(self, obj, item):
         return item in obj
 
+    def keys(self, obj):
+        return obj.keys()
+
 
 class TomlConfig(ConfigBackend):
     pass
@@ -64,15 +71,16 @@ class YamlConfig(ConfigBackend):
 
 
 class FeatureGenerator(object):
-    def __init__(self, backend="json"):
-        self._init_ops()
-        self._init_backend(backend)
+    def __init__(self, backend="json", show=True):
         self.config = None
+        self.show = show
+        self._init_backend(backend)
+        self._init_ops()
 
     def _init_ops(self):
         self.ops = OpCollection.ops
-        print("[Init Ops] Support Ops as follow:")
-        show_ops()
+        if self.show:
+            self._show_ops()
 
     def _init_backend(self, backend):
         if backend == "json":
@@ -83,10 +91,13 @@ class FeatureGenerator(object):
         #     self.backend = YamlConfig()
         else:
             raise ValueError("%s not support" % backend)
-        print("[Init Config] parser backend is %s" % backend)
+        if self.show:
+            print("Config Parser Backend is [%s]\n" % backend)
+            self._show_config()
 
     def _update_config(self, file):
         self.config = self.backend.read_config(file)
+        self._show_config()
 
     def _get(self, obj, item):
         return self.backend.get(obj, item)
@@ -96,6 +107,19 @@ class FeatureGenerator(object):
 
     def _has(self, obj, item):
         return self.backend.has(obj, item)
+
+    def _keys(self, obj):
+        return self.backend.keys(obj)
+
+    def _show_ops(self):
+        print("Supported Ops:\n")
+        self._recursive_print(self.ops)
+        print("\n")
+
+    def _show_config(self):
+        print("Current Config: \n")
+        self._recursive_print(self.config)
+        print("\n")
 
     # --------------------------
     #  first feature
@@ -143,7 +167,7 @@ class FeatureGenerator(object):
         end_ts = date2timestamp(end_date)
         ts_delta = end_ts - timestamp
         if ts_delta < 0:
-            raise ValueError("invalid end_date")
+            raise ValueError("invalid end_date", end_ts, timestamp)
         _decay = exponential_decay(ts_delta / float(24 * 3600), finish)
         return value * _decay, timestamp
 
@@ -285,6 +309,23 @@ class FeatureGenerator(object):
         stat_op_name = self._get_with_default(entity, "Stat", default="default")
         agg_op_name = self._get_with_default(entity, "Agg", default="default")
         return col, name, stat_op_name, agg_op_name
+
+    def _recursive_print(self, obj, indent=""):
+        try:
+            if isinstance(obj, list):
+                for ele in obj:
+                    print(indent + "-" * 20)
+                    self._recursive_print(ele, indent)
+                    print(indent + "-" * 20)
+            else:
+                for key in self._keys(obj):
+                    print(indent, key)
+                    self._recursive_print(self._get(obj, key), "    " + indent)
+        except AttributeError:
+            if hasattr(obj, "__name__"):
+                print(indent, obj.__name__)
+            else:
+                print(indent, obj)
 
 
 def _exponential_decay(t, init=1.0, m=30, finish=0.5):
