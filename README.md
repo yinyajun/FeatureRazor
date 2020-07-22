@@ -13,7 +13,7 @@ Following their idea, I implement this ETL tool based on pySpark.
 3. Support configure to define specified features
 
 ## Usage
-Default config json file
+demo config file
 ```json
 {
   "Group": {
