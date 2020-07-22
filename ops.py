@@ -15,6 +15,10 @@ import numpy as np
 import six
 
 
+class OperationException(Exception):
+    pass
+
+
 def camel2underline(camel_str):
     # 匹配正则，匹配小写字母和大写字母的分界位置
     p = re.compile(r'([a-z]|\d)([A-Z])')
@@ -124,7 +128,8 @@ class StatOp(object, six.with_metaclass(OpCollection)):
     def check_end_date(self, end_date):
         if not isinstance(end_date, six.text_type):
             raise TypeError(
-                "%s's argument end_date expects type is six.text_type, got %s" % (self.__class__.__name__, type(end_date)))
+                "%s's argument end_date expects type is six.text_type, got %s" % (
+                    self.__class__.__name__, type(end_date)))
         try:
             datetime.strptime(end_date, "%Y%m%d")
         except ValueError:
@@ -195,7 +200,7 @@ class TransOp(object, six.with_metaclass(OpCollection)):
         if not isinstance(value, allowed):
             raise TypeError(
                 "%s's argument value expects type is (six.text_type, int, float, list), got %s" % (
-                self.__class__.__name__, type(value)))
+                    self.__class__.__name__, type(value)))
 
     def transform(self, value=None, **kwargs):
         raise NotImplementedError
@@ -275,6 +280,19 @@ class NormalizationAccountTransOp(TransOp):
         self.check_value(value=value, allowed=(list,))
         _sum = sum(value)
         return [i / _sum for i in value]
+
+
+class SaveDivideTransOp(TransOp):
+    def transform(self, value=None, **kwargs):
+        self.check_value(value=value, allowed=(list,))
+        assert len(value) == 2
+        try:
+            a, b = float(value[0]), float(value[1])
+            if b == 0:
+                return 0.0
+            return a / b
+        except Exception as e:
+            raise OperationException("SaveDivideTransOp", value, kwargs, e)
 
 
 ##########################

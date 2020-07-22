@@ -14,7 +14,7 @@ from collections import defaultdict, OrderedDict
 from datetime import datetime, timedelta
 from pyspark.sql import Row
 
-from .ops import OpCollection, show_ops
+from .ops import OpCollection
 from .util import date2timestamp
 
 AllowedBaseOpTypes = ["TransOp", "AggOp", "StatOp"]
@@ -134,16 +134,16 @@ class FeatureGenerator(ConfigBackend):
     # --------------------------
     #  basic
     # --------------------------
-    def _default_parse(self, obj, base_op_types=[]):
-        col = self.get(obj, "Column")
-        name = self.get_with_default(obj, "Name", default=col)
-        assert isinstance(name, six.text_type), (type(name), col, name)
+    def _default_parse(self, obj, main_item="Column", base_op_types=[]):
+        main = self.get(obj, main_item)
+        name = self.get_with_default(obj, "Name", default=main)
+        assert isinstance(name, six.text_type), (type(name), main, name)
         ops = []
         for bt in base_op_types:
             if bt not in AllowedBaseOpTypes:
                 raise ValueError("base op type error")
             ops.append(self._parse_op(obj, bt))
-        return name, col, ops
+        return name, main, ops
 
     def _parse_op(self, obj_config, base_op_type):
         """
@@ -199,7 +199,7 @@ class FeatureGenerator(ConfigBackend):
 
     def _transform1(self, struct):
         tmp = OrderedDict()
-        features = self.get(self.config, "Features")
+        features = self.get(self.config, "PrimaryFeatures")
         assert isinstance(features, list)
         for f in features:
             name, col, trans_spec = self._parses_direct_feature(f)
@@ -247,13 +247,16 @@ class FeatureGenerator(ConfigBackend):
         aggregate grouped_items according to dimensions
         """
         dim_value_conf = self.get(dim_conf, "DimValue")
-        feats_conf = self.get(dim_conf, "Features")
+        prim_feats_conf = self.get(dim_conf, "PrimaryFeatures")
+        comp_feats_conf = self.get(dim_conf, "CompositeFeatures")
         decay_conf = self.get(self.config, "Decay")
         decay_col, decay_end, decay_finish = self._parse_decay(decay_conf)
+        # generating features
         features = OrderedDict()
-        for feat in feats_conf:
+        # primary_features(agg, stat)
+        for prim_feat in prim_feats_conf:
             _mapping = defaultdict(list)
-            name, col, stat_spec, agg_spec, trans_spec = self._parse_aggregated_feature(feat)
+            name, col, stat_spec, agg_spec = self._parse_aggregated_feature(prim_feat)
             for item in grouped_items:
                 dim_value = self._retrieve_dimension(item, dim_value_conf)
                 timestamp = self._retrieve_timestamp(item, decay_col)
@@ -268,6 +271,18 @@ class FeatureGenerator(ConfigBackend):
             self._aggregate_mapping(_mapping, agg_spec)
             # execute stat op on aggregated values
             features[name] = self._execute_op(stat_spec, _mapping, end_date=decay_end)
+        # composite features(trans)
+        for comp_feat in comp_feats_conf:
+            name, prim_feat, trans_spec = self._parse_composite_feature(comp_feat)
+            if name in features:
+                # todo: check first
+                raise ValueError("Duplicated name", name)
+            if isinstance(prim_feat, list):
+                value = [features[i] for i in prim_feat]
+            else:
+                assert isinstance(prim_feat, six.text_type)
+                value = features[prim_feat]
+            features[name] = self._execute_op(trans_spec, value)
         return features
 
     def _transform2(self, group_items):
@@ -298,13 +313,20 @@ class FeatureGenerator(ConfigBackend):
         trans_op, args = ops[0]
         return name, col, (trans_op, args)
 
-    def _parse_aggregated_feature(self, feature_config):
-        name, col, ops = self._default_parse(feature_config, base_op_types=["StatOp", "AggOp", "TransOp"])
-        assert len(ops) == 3
+    def _parse_aggregated_feature(self, primary_feature_config):
+        name, col, ops = self._default_parse(primary_feature_config, base_op_types=["StatOp", "AggOp"])
+        assert len(ops) == 2
         stat_op, args1 = ops[0]
         agg_op, args2 = ops[1]
-        trans_op, args3 = ops[2]
-        return name, col, (stat_op, args1), (agg_op, args2), (trans_op, args3)
+        return name, col, (stat_op, args1), (agg_op, args2)
+
+    def _parse_composite_feature(self, composite_feature_config):
+        name, primary_feature, ops = self._default_parse(composite_feature_config,
+                                                         main_item="PrimaryFeature",
+                                                         base_op_types=["TransOp"])
+        assert len(ops) == 1
+        trans_op, args = ops[0]
+        return name, primary_feature, (trans_op, args)
 
     def _parse_group(self):
         group = self.get(self.config, "Group")

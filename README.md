@@ -22,39 +22,46 @@ Default config json file
   "Decay": {
     "Column": "timestamp",
     "EndDate": "20200712",
-    "Finish": 0.8
+    "Finish": 1.0
   },
   "Dimensions": [
     {
       "DimValue": {
         "Column": "user_id"
       },
-      "Features": [
+      "PrimaryFeatures": [
         {
-          "Name": "item_click_sum_14",
+          "Name": "image_click_sum_5",
           "Column": "click",
-          "StatOp": "sum14",
-          "AggOp": "last",
+          "StatOp": "sum5",
+          "AggOp": "last"
+        },
+        {
+          "Name": "image_browse_sum_5",
+          "Column": "browse",
+          "StatOp": "sum5",
+          "AggOp": "last"
+        }
+      ],
+      "CompositeFeatures": [
+        {
+          "Name": "image_click_sum_5_scaled",
+          "PrimaryFeature": "image_click_sum_5",
           "TransOp": {
             "Op": "scaler_min_max",
             "Args": {
-              "min": 0,
-              "max": 100
+              "_min": 0,
+              "_max": 100
             }
           }
         },
         {
-          "Name": "item_browse_sum_14",
-          "Column": "browse",
-          "StatOp": "sum14",
-          "AggOp": "last",
-          "TransOp": {
-            "Op": "scaler_min_max",
-            "Args": {
-              "min": 0,
-              "max": 100
-            }
-          }
+          "Name": "image_click_hotness_5",
+          "PrimaryFeature": [
+            "image_click_sum_5",
+            "image_browse_sum_5"
+          ],
+          "TransOp": "save_divide"
         }
       ]
     }
@@ -75,6 +82,8 @@ features.show()
 
 ## Supported Operations
 ```bash
+Config Parser Backend is [json]
+
 Supported Ops:
 
  TransOp
@@ -82,6 +91,8 @@ Supported Ops:
          NormalizationNormTransOp
      default
          DefaultTransOp
+     save_divide
+         SaveDivideTransOp
      bucket
          BucketTransOp
      scaler_min_max
@@ -125,63 +136,5 @@ Supported Ops:
 
 ```
 
-## Config Example
-```bash
-Current Config: 
 
- Group
-     Column
-         image_id
- Dimensions
-    --------------------
-     DimValue
-         Column
-             user_id
-     Features
-        --------------------
-         Column
-             click
-         StatOp
-             sum14
-         TransOp
-             Args
-                 max
-                     100
-                 min
-                     0
-             Op
-                 scaler_min_max
-         Name
-             item_click_sum_14
-         AggOp
-             last
-        --------------------
-        --------------------
-         Column
-             browse
-         StatOp
-             sum14
-         TransOp
-             Args
-                 max
-                     100
-                 min
-                     0
-             Op
-                 scaler_min_max
-         Name
-             item_browse_sum_14
-         AggOp
-             last
-        --------------------
-    --------------------
- Decay
-     Column
-         timestamp
-     Finish
-         0.8
-     EndDate
-         20200712
-
-```
 
