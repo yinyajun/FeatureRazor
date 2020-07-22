@@ -1,7 +1,7 @@
-# PySparkRazor
-A simple ETL(pySpark backed) tool for generating features for recommendation backed by pySpark. 
+# FeatureRazor
+A simple ETL(pySpark backed) tool for generating features backed by pySpark. 
 
-ETL jobs was abstracted as several paradigms and each paradigm are executed by operations. This idea originates 
+ETL jobs was abstracted to several paradigms and each paradigm are executed by operations. This idea originates 
 from [MeiTuan Tech](https://tech.meituan.com/2016/12/09/feature-pipeline.html). They did not open source. 
 
 Following their idea, I implement this ETL tool based on pySpark.
