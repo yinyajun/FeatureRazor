@@ -124,13 +124,13 @@ class StatOp(object, six.with_metaclass(OpCollection)):
     def check_end_date(self, end_date):
         if not isinstance(end_date, six.text_type):
             raise TypeError(
-                "%s's argument end_time expects type is six.text_type, got %s" % (self.__class__.__name__, type(end_date)))
+                "%s's argument end_date expects type is six.text_type, got %s" % (self.__class__.__name__, type(end_date)))
         try:
             datetime.strptime(end_date, "%Y%m%d")
         except ValueError:
-            raise ValueError("{0}'s argument end_time does not match format '%Y%m%d'".format(self.__class__.__name__))
+            raise ValueError("{0}'s argument end_date does not match format '%Y%m%d'".format(self.__class__.__name__))
 
-    def transform(self, dimension_grouping=None, end_time=None):
+    def transform(self, dimension_grouping=None, end_date=None):
         raise NotImplementedError
 
 

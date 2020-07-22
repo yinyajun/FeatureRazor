@@ -24,17 +24,37 @@ Default config json file
     "EndDate": "20200712",
     "Finish": 0.8
   },
-  "Features": [
+  "Dimensions": [
     {
-      "Dimensions": {
+      "DimValue": {
         "Column": "user_id"
       },
-      "Entities": [
+      "Features": [
         {
-          "Column": "click",
           "Name": "item_click_sum_14",
-          "Stat": "sum14",
-          "Agg": "first"
+          "Column": "click",
+          "StatOp": "sum14",
+          "AggOp": "last",
+          "TransOp": {
+            "Op": "scaler_min_max",
+            "Args": {
+              "min": 0,
+              "max": 100
+            }
+          }
+        },
+        {
+          "Name": "item_browse_sum_14",
+          "Column": "browse",
+          "StatOp": "sum14",
+          "AggOp": "last",
+          "TransOp": {
+            "Op": "scaler_min_max",
+            "Args": {
+              "min": 0,
+              "max": 100
+            }
+          }
         }
       ]
     }
@@ -49,7 +69,7 @@ file = "./config/image_second.json"
 df = sqlContext.read.parquet(path)
 
 fg =FeatureGenerator()
-features = fg.transform_second(file, df)
+features = fg.transform_aggregated(file, df)
 features.show()
 ```
 
@@ -112,22 +132,48 @@ Current Config:
  Group
      Column
          image_id
- Features
+ Dimensions
     --------------------
-     Entities
+     DimValue
+         Column
+             user_id
+     Features
         --------------------
          Column
              click
-         Agg
-             first
-         Stat
+         StatOp
              sum14
+         TransOp
+             Args
+                 max
+                     100
+                 min
+                     0
+             Op
+                 scaler_min_max
          Name
              item_click_sum_14
+         AggOp
+             last
         --------------------
-     Dimensions
+        --------------------
          Column
-             user_id
+             browse
+         StatOp
+             sum14
+         TransOp
+             Args
+                 max
+                     100
+                 min
+                     0
+             Op
+                 scaler_min_max
+         Name
+             item_browse_sum_14
+         AggOp
+             last
+        --------------------
     --------------------
  Decay
      Column
@@ -136,5 +182,6 @@ Current Config:
          0.8
      EndDate
          20200712
+
 ```
 

@@ -17,6 +17,8 @@ from pyspark.sql import Row
 from .ops import OpCollection, show_ops
 from .util import date2timestamp
 
+AllowedBaseOpTypes = ["TransOp", "AggOp", "StatOp"]
+
 
 class ConfigBackend(object, six.with_metaclass(abc.ABCMeta)):
     @abc.abstractmethod
@@ -37,6 +39,10 @@ class ConfigBackend(object, six.with_metaclass(abc.ABCMeta)):
 
     @abc.abstractmethod
     def keys(self, obj):
+        pass
+
+    @abc.abstractmethod
+    def to_dict(self, obj):
         pass
 
 
@@ -61,16 +67,14 @@ class JsonConfig(ConfigBackend):
     def keys(self, obj):
         return obj.keys()
 
-
-class TomlConfig(ConfigBackend):
-    pass
-
-
-class YamlConfig(ConfigBackend):
-    pass
+    def to_dict(self, obj):
+        return obj
 
 
-class FeatureGenerator(object):
+class FeatureGenerator(ConfigBackend):
+    # --------------------------
+    #  init
+    # --------------------------
     def __init__(self, backend="json", show=True):
         self.config = None
         self.show = show
@@ -85,10 +89,6 @@ class FeatureGenerator(object):
     def _init_backend(self, backend):
         if backend == "json":
             self.backend = JsonConfig()
-        # elif backend == "toml":
-        #     self.backend = TomlConfig()
-        # elif backend == "yaml":
-        #     self.backend = YamlConfig()
         else:
             raise ValueError("%s not support" % backend)
         if self.show:
@@ -96,20 +96,8 @@ class FeatureGenerator(object):
             self._show_config()
 
     def _update_config(self, file):
-        self.config = self.backend.read_config(file)
+        self.config = self.read_config(file)
         self._show_config()
-
-    def _get(self, obj, item):
-        return self.backend.get(obj, item)
-
-    def _get_with_default(self, obj, item, default):
-        return self.backend.get_with_default(obj, item, default)
-
-    def _has(self, obj, item):
-        return self.backend.has(obj, item)
-
-    def _keys(self, obj):
-        return self.backend.keys(obj)
 
     def _show_ops(self):
         print("Supported Ops:\n")
@@ -117,39 +105,118 @@ class FeatureGenerator(object):
         print("\n")
 
     def _show_config(self):
-        print("Current Config: \n")
-        self._recursive_print(self.config)
-        print("\n")
+        if self.config:
+            print("Current Config: \n")
+            self._recursive_print(self.config)
+            print("\n")
 
     # --------------------------
-    #  first feature
+    #  config
     # --------------------------
-    def transform_first(self, file, df):
+    def read_config(self, file):
+        return self.backend.read_config(file)
+
+    def get(self, obj, item):
+        return self.backend.get(obj, item)
+
+    def get_with_default(self, obj, item, default):
+        return self.backend.get_with_default(obj, item, default)
+
+    def has(self, obj, item):
+        return self.backend.has(obj, item)
+
+    def keys(self, obj):
+        return self.backend.keys(obj)
+
+    def to_dict(self, obj):
+        return self.backend.to_dict(obj)
+
+    # --------------------------
+    #  basic
+    # --------------------------
+    def _default_parse(self, obj, base_op_types=[]):
+        col = self.get(obj, "Column")
+        name = self.get_with_default(obj, "Name", default=col)
+        assert isinstance(name, six.text_type), (type(name), col, name)
+        ops = []
+        for bt in base_op_types:
+            if bt not in AllowedBaseOpTypes:
+                raise ValueError("base op type error")
+            ops.append(self._parse_op(obj, bt))
+        return name, col, ops
+
+    def _parse_op(self, obj_config, base_op_type):
+        """
+        :param obj_config: specific config
+        :param base_op_type: "Stat", "Trans" or "Agg"
+        :return: op_instance, args
+        """
+        op, args = None, None
+        op_config = self.get_with_default(obj_config, base_op_type, six.text_type("default"))
+        if isinstance(op_config, six.text_type):
+            op_name = op_config
+        else:  # op_config is like {"Op": xx, Args:xxx}
+            op_name = self.get(op_config, "Op")
+            args = self.get(op_config, "Args")
+            assert isinstance(args, dict)
+        op = self.get_op(base_op_type, op_name)()
+        return op, args
+
+    @staticmethod
+    def _execute_op(op_spec, value, **extra_args):
+        op, args = op_spec
+        if isinstance(args, dict):
+            args.update(extra_args)
+        else:
+            args = extra_args
+        return op.transform(value, **args)
+
+    def _recursive_print(self, obj, indent=""):
+        try:
+            if isinstance(obj, list):
+                for ele in obj:
+                    print(indent + "-" * 20)
+                    self._recursive_print(ele, indent)
+                    print(indent + "-" * 20)
+            else:
+                for key in self.keys(obj):
+                    print(indent, key)
+                    self._recursive_print(self.get(obj, key), "    " + indent)
+        except AttributeError:
+            if hasattr(obj, "__name__"):
+                print(indent, obj.__name__)
+            else:
+                print(indent, obj)
+
+    # --------------------------
+    #  direct feature
+    # --------------------------
+    def transform_direct(self, file, df):
         self._update_config(file)
-        rdd = df.rdd.map(self._transform_first)
+        rdd = df.rdd.map(self._transform1)
         df = rdd.toDF()
         return df
 
-    def _transform_first(self, struct):
+    def _transform1(self, struct):
         tmp = OrderedDict()
-        features = self._get_features()
+        features = self.get(self.config, "Features")
         assert isinstance(features, list)
         for f in features:
-            col, name, op = self._parse_first_feature(f)
+            name, col, trans_spec = self._parses_direct_feature(f)
+            trans_op, args = trans_spec
             assert col in struct
-            trans_op = self._get_trans_op(op)
-            tmp[name] = trans_op.transform(struct[col])
+            tmp[name] = trans_op.transform(hist=struct[col], **args)
         row = Row(*tmp.keys())
         res = row(*tmp.values())
         return res
 
     # --------------------------
-    #  second feature
+    #  aggregated feature
     # --------------------------
-    def _first_grouped(self, df):
+    def _first_aggregate(self, df):
         """first group"""
         _, cols = self._parse_group()
-        g = df.rdd.groupBy(lambda p: self._make_group(row=p, cols=cols))
+        g = df.rdd.groupBy(lambda row: self._make_group(row=row, cols=cols))
         return g
 
     @staticmethod
@@ -171,161 +238,115 @@ class FeatureGenerator(object):
         _decay = exponential_decay(ts_delta / float(24 * 3600), finish)
         return value * _decay, timestamp
 
-    def _aggregate_value(self, mapping, op_name):
-        op = self._get_agg_op(op_name)
-        for dim, hist in mapping.items():
-            mapping[dim] = op.transform(hist=hist)
+    def _aggregate_mapping(self, mapping, op_spec):
+        for key, value in mapping.items():
+            mapping[key] = self._execute_op(op_spec, value)
 
-    def _stat_value(self, dimension_mapping, op_name, end_date):
-        op = self._get_stat_op(op_name)
-        ret = op.transform(dimension_grouping=dimension_mapping, end_date=end_date)
-        return ret
-
-    def _second_grouped(self, grouped_items, feature, decay):
+    def _second_aggregate(self, grouped_items, dim_conf):
         """
-        second group
-        group_items is the product of first group
-        second group occurs in group_items
+        aggregate grouped_items according to dimensions
         """
-        dims, entities = self._parse_feature(feature)
-        decay_col, decay_end, decay_finish = self._parse_decay(decay)
+        dim_value_conf = self.get(dim_conf, "DimValue")
+        feats_conf = self.get(dim_conf, "Features")
+        decay_conf = self.get(self.config, "Decay")
+        decay_col, decay_end, decay_finish = self._parse_decay(decay_conf)
         features = OrderedDict()
-        for entity in entities:
-            dimension_mapping = defaultdict(list)
-            col, name, stat_op_name, agg_op_name = self._parse_entity(entity)
+        for feat in feats_conf:
+            _mapping = defaultdict(list)
+            name, col, stat_spec, agg_spec, trans_spec = self._parse_aggregated_feature(feat)
             for item in grouped_items:
-                dim_value = self._retrieve_dimension(item, dims)
+                dim_value = self._retrieve_dimension(item, dim_value_conf)
                 timestamp = self._retrieve_timestamp(item, decay_col)
                 value = item[col]
                 # time decay
-                v, t = self._time_decay(value, timestamp, decay_end, decay_finish)
-                dimension_mapping[dim_value].append((v, t))
+                try:
+                    v, t = self._time_decay(value, timestamp, decay_end, decay_finish)
+                    _mapping[dim_value].append((v, t))
+                except ValueError:  # timestamp >= decay end
+                    continue
             # aggregate values under the same dimension value
-            self._aggregate_value(dimension_mapping, agg_op_name)
-            # save statistical value in features
-            features[name] = self._stat_value(dimension_mapping, stat_op_name, decay_end)
+            self._aggregate_mapping(_mapping, agg_spec)
+            # execute stat op on aggregated values
+            features[name] = self._execute_op(stat_spec, _mapping, end_date=decay_end)
         return features
 
-    def _transform_second(self, group_items):
+    def _transform2(self, group_items):
         group_key, grouped_items = group_items[0], group_items[1]
         group_name, _ = self._parse_group()
-        features = OrderedDict()
-        features[group_name] = group_key
-        decay = self._get_decay()
-        for fea in self._get_features():
-            new_features = self._second_grouped(grouped_items, fea, decay)
-            features.update(new_features)
-        row = Row(*features.keys())
-        res = row(*features.values())
+        feats = OrderedDict()
+        feats[group_name] = group_key
+        for dimension_conf in self.get(self.config, "Dimensions"):
+            new_feats = self._second_aggregate(grouped_items, dimension_conf)
+            feats.update(new_feats)
+        row = Row(*feats.keys())
+        res = row(*feats.values())
         return res
 
-    def transform_second(self, file, df):
+    def transform_aggregated(self, file, df):
         self._update_config(file)
-        grouped_rdd = self._first_grouped(df)
-        rdd = grouped_rdd.map(self._transform_second)
+        grouped_rdd = self._first_aggregate(df)
+        rdd = grouped_rdd.map(self._transform2)
         df = rdd.toDF()
         return df
 
     # --------------------------
     #  util
     # --------------------------
+    def _parses_direct_feature(self, feature_config):
+        name, col, ops = self._default_parse(feature_config, base_op_types=["TransOp"])
+        assert len(ops) == 1
+        trans_op, args = ops[0]
+        return name, col, (trans_op, args)
 
-    def _get_decay(self):
-        return self._get(self.config, "Decay")
-
-    def _get_features(self):
-        return self._get(self.config, "Features")
+    def _parse_aggregated_feature(self, feature_config):
+        name, col, ops = self._default_parse(feature_config, base_op_types=["StatOp", "AggOp", "TransOp"])
+        assert len(ops) == 3
+        stat_op, args1 = ops[0]
+        agg_op, args2 = ops[1]
+        trans_op, args3 = ops[2]
+        return name, col, (stat_op, args1), (agg_op, args2), (trans_op, args3)
 
     def _parse_group(self):
-        group = self._get(self.config, "Group")
-        col = self._get(group, "Column")
-        if isinstance(col, list):
-            name = self._get(group, "Name")
-        else:  # col should be str
-            assert isinstance(col, six.text_type), type(col)
-            name = col
+        group = self.get(self.config, "Group")
+        name, col, _ = self._default_parse(group)
         return name, col
 
-    def _parse_first_feature(self, feature):
-        col = self._get(feature, "Column")
-        name = self._get(feature, "Name")
-        op = self._get_with_default(feature, "Trans", default="default")
-        return col, name, op
-
-    def _get_trans_op(self, op_name):
-        return self._get_op(self.ops, "TransOp", op_name)()
-
-    def _get_stat_op(self, op_name):
-        return self._get_op(self.ops, "StatOp", op_name)()
-
-    def _get_agg_op(self, op_name):
-        return self._get_op(self.ops, "AggOp", op_name)()
-
-    def _get_op(self, op_collections, base_op, op_name):
-        op_collection = self._get(op_collections, base_op)
-        op = self._get(op_collection, op_name)
+    def get_op(self, base_op, op_name):
+        op_collection = self.get(self.ops, base_op)
+        op = self.get(op_collection, op_name)
         return op
 
-    def _retrieve_dimension(self, item, dims):
-        if isinstance(dims, list):
+    def _retrieve_dimension(self, item, dim_value):
+        if isinstance(dim_value, list):
             res = []
-            for d in dims:
-                col, trans_op_name = self._parse_dimension(d)
-                op = self._get_trans_op(trans_op_name)
-                new_dim = op.transform(item[col])
-                res.append(six.text_type(new_dim))
+            for d in dim_value:
+                col, trans_spec = self._parse_dim_value(d)
+                new_dim_value = self._execute_op(trans_spec, item[col])
+                res.append(six.text_type(new_dim_value))
             return "*".join(res)
-        else:  # dims is only one dim
-            col, trans_op_name = self._parse_dimension(dims)
-            op = self._get_trans_op(trans_op_name)
-            return op.transform(item[col])
+        else:  # single dim value
+            col, trans_spec = self._parse_dim_value(dim_value)
+            new_dim_value = self._execute_op(trans_spec, item[col])
+            return new_dim_value
 
-    def _parse_dimension(self, dimension):
-        col = self._get(dimension, "Column")
-        trans_op_name = self._get_with_default(dimension, "Trans", default="default")
-        return col, trans_op_name
+    def _parse_dim_value(self, dim_value_config):
+        _, col, trans_spec = self._parses_direct_feature(dim_value_config)
+        return col, trans_spec
 
-    def _parse_decay(self, decay):
-        col = self._get(decay, "Column")
-        if self._has(decay, "EndDate"):
-            end_date = self._get(decay, "EndDate")
-        else:
-            yesterday = datetime.strftime(datetime.today() - timedelta(1), "%Y%m%d")
-            end_date = yesterday
-        finish = self._get(decay, "Finish")
+    def _parse_decay(self, decay_config):
+        col = self.get(decay_config, "Column")
+        yesterday = datetime.strftime(datetime.today() - timedelta(1), "%Y%m%d")
+        end_date = self.get_with_default(decay_config, "EndDate", default=yesterday)
+        finish = self.get_with_default(decay_config, "Finish", default=1.0)
+        try:
+            datetime.strptime(end_date, "%Y%m%d")
+        except ValueError as e:
+            raise ValueError("end date parse failed", e)
+        assert isinstance(finish, float)
         return col, end_date, finish
 
     def _retrieve_timestamp(self, item, col):
-        return int(self._get(item, col))
-
-    def _parse_feature(self, feature):
-        dims = self._get(feature, "Dimensions")
-        entities = self._get(feature, "Entities")
-        return dims, entities
-
-    def _parse_entity(self, entity):
-        col = self._get(entity, "Column")
-        name = self._get(entity, "Name")
-        stat_op_name = self._get_with_default(entity, "Stat", default="default")
-        agg_op_name = self._get_with_default(entity, "Agg", default="default")
-        return col, name, stat_op_name, agg_op_name
-
-    def _recursive_print(self, obj, indent=""):
-        try:
-            if isinstance(obj, list):
-                for ele in obj:
-                    print(indent + "-" * 20)
-                    self._recursive_print(ele, indent)
-                    print(indent + "-" * 20)
-            else:
-                for key in self._keys(obj):
-                    print(indent, key)
-                    self._recursive_print(self._get(obj, key), "    " + indent)
-        except AttributeError:
-            if hasattr(obj, "__name__"):
-                print(indent, obj.__name__)
-            else:
-                print(indent, obj)
+        return int(self.get(item, col))
 
 
 def _exponential_decay(t, init=1.0, m=30, finish=0.5):
